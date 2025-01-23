@@ -3,8 +3,11 @@
     .version = "0.0.8",
 
     .paths = [][]const u8{
+        "README.md",
         "build.zig",
         "build.zig.zon",
+        "src",
+        "lib",
     },
 
     .dependencies = .{
