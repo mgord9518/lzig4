@@ -3,62 +3,31 @@ const testing = std.testing;
 const mem = std.mem;
 
 // for the frame format
-pub const BlockHeader = struct {
+pub const BlockHeader = packed struct(u32) {
     size: u31,
-    compressed: u1,
+    uncompressed: bool,
 };
-
-pub fn readBlockHeader(data: []const u8, header: *BlockHeader) !usize {
-    if (data.len < 4)
-        return error.NoEnoughData;
-    const size = mem.readInt(u32, data[0..4], .little);
-    header.size = @intCast(size & 0x7FFFFFFF);
-    header.compressed = ~@as(u1, @intCast(size >> 31));
-    return 4;
-}
-
-pub fn readBlockChecksum(data: []const u8, checksum: *u32) !usize {
-    if (data.len < 4)
-        return error.NoEnoughData;
-    checksum.* = mem.readInt(u32, data[0..4], .little);
-    return 4;
-}
 
 test "read block header" {
-    const data = [4]u8{ 0xFE, 0xDE, 0xBC, 0x9A };
-    var header: BlockHeader = undefined;
-    const read = try readBlockHeader(&data, &header);
-    try testing.expectEqual(4, read);
-    try testing.expectEqual(0x1ABCDEFE, header.size);
-    try testing.expectEqual(0, header.compressed);
+    const data = .{ 0xFE, 0xDE, 0xBC, 0x9A };
+    const header: BlockHeader = @bitCast(mem.readInt(u32, &data, .little));
+
+    try testing.expectEqual(header.size, 0x1ABCDEFE);
+    try testing.expectEqual(header.uncompressed, true);
 }
 
-test "read block checksum" {
-    const data = [4]u8{ 0xFE, 0xDE, 0xBC, 0x9A };
-    var size: u32 = undefined;
-    const read = try readBlockChecksum(&data, &size);
-    try testing.expectEqual(4, read);
-    try testing.expectEqual(0x9ABCDEFE, size);
-}
+// General block functions
 
-// general block functions
-
-const Token = struct {
-    literal_length: u4,
+const Token = packed struct(u8) {
     match_length: u4,
+    literal_length: u4,
 };
 
-pub fn readToken(token_byte: u8) Token {
-    var token: Token = undefined;
-    token.literal_length = @intCast((token_byte & 0xF0) >> 4);
-    token.match_length = @intCast(token_byte & 0x0F);
-    return token;
-}
-
 test "Read Token" {
-    const token = readToken(0x54);
-    try testing.expectEqual(5, token.literal_length);
-    try testing.expectEqual(4, token.match_length);
+    const token: Token = @bitCast(@as(u8, 0x54));
+
+    try testing.expectEqual(token.literal_length, 5);
+    try testing.expectEqual(token.match_length, 4);
 }
 
 // returns the number of bytes read
@@ -70,28 +39,28 @@ test "determine literal length" {
     {
         const data = [3]u8{ 0xF0, 33, 4 };
         var length: usize = undefined;
-        const read = try determineLiteralLengh(readToken(data[0]), data[1..], &length);
+        const read = try determineLiteralLengh(@bitCast(data[0]), data[1..], &length);
         try testing.expectEqual(1, read);
         try testing.expectEqual(48, length);
     }
     {
         const data = [5]u8{ 0xF0, 255, 10, 22, 33 };
         var length: usize = undefined;
-        const read = try determineLiteralLengh(readToken(data[0]), data[1..], &length);
+        const read = try determineLiteralLengh(@bitCast(data[0]), data[1..], &length);
         try testing.expectEqual(2, read);
         try testing.expectEqual(280, length);
     }
     {
         const data = [4]u8{ 0xF0, 0, 232, 21 };
         var length: usize = undefined;
-        const read = try determineLiteralLengh(readToken(data[0]), data[1..], &length);
+        const read = try determineLiteralLengh(@bitCast(data[0]), data[1..], &length);
         try testing.expectEqual(1, read);
         try testing.expectEqual(15, length);
     }
     {
         const data = [4]u8{ 0xF0, 0xFF, 0xFF, 0xFF };
         var length: usize = undefined;
-        try testing.expectError(error.IncompleteData, determineLiteralLengh(readToken(data[0]), data[1..], &length));
+        try testing.expectError(error.IncompleteData, determineLiteralLengh(@bitCast(data[0]), data[1..], &length));
         try testing.expectEqual(15 + 255 + 255 + 255, length);
     }
 }
@@ -106,12 +75,18 @@ pub fn readMatchOperation(token: Token, data: []const u8, operation: *MatchOpera
     if (data.len < 2) {
         return error.NoEnoughData;
     }
+
     operation.offset = mem.readInt(u16, data[0..2], .little);
     const read: usize = 2;
     defer {
         operation.match_length += 4;
     }
-    return (try variableLengthIntegerWithHalfByteStart(token.match_length, data[read..], &operation.match_length)) + read;
+
+    return (try variableLengthIntegerWithHalfByteStart(
+        token.match_length,
+        data[read..],
+        &operation.match_length,
+    )) + read;
 }
 
 fn variableLengthIntegerWithHalfByteStart(start: u4, data: []const u8, length_out: *usize) !usize {
@@ -134,7 +109,7 @@ fn variableLengthIntegerWithHalfByteStart(start: u4, data: []const u8, length_ou
 test "read match operation" {
     {
         const token = Token{ .literal_length = 0, .match_length = 10 };
-        const data = [4]u8{ 0x04, 0x30, 0xFF, 32 };
+        const data = .{ 0x04, 0x30, 0xFF, 32 };
         var operation: MatchOperation = undefined;
         const read = try readMatchOperation(token, &data, &operation);
         try testing.expectEqual(2, read);
@@ -143,7 +118,7 @@ test "read match operation" {
     }
     {
         const token = Token{ .literal_length = 0, .match_length = 15 };
-        const data = [4]u8{ 0x04, 0x30, 0xFF, 0x32 };
+        const data = .{ 0x04, 0x30, 0xFF, 0x32 };
         var operation: MatchOperation = undefined;
         const read = try readMatchOperation(token, &data, &operation);
         try testing.expectEqual(4, read);
@@ -170,6 +145,7 @@ test "read match operation" {
 pub fn applyMatchOperation(operation: MatchOperation, uncompressed: []u8, start_offset: usize) usize {
     std.debug.assert(operation.offset > 0);
     std.debug.assert(start_offset >= operation.offset);
+
     const end_offset = start_offset + operation.match_length;
     mem.copyForwards(u8, uncompressed[start_offset..end_offset], uncompressed[start_offset - operation.offset .. end_offset - operation.offset]);
     return end_offset;
@@ -177,7 +153,7 @@ pub fn applyMatchOperation(operation: MatchOperation, uncompressed: []u8, start_
 
 test "apply match operation" {
     {
-        var data = [_]u8{ 1, 2, 3, 4 } ++ [_]u8{0} ** 100;
+        var data = [_]u8{ 1, 2, 3, 4 } ++ (.{0} ** 100);
         const operation = MatchOperation{ .offset = 3, .match_length = 100 };
         const offset = applyMatchOperation(operation, data[0..], 4);
         try testing.expectEqual(data.len, offset);
@@ -185,7 +161,7 @@ test "apply match operation" {
         try testing.expectEqual(expected_data, data);
     }
     {
-        var data = [_]u8{ 1, 2, 3, 4 } ++ [_]u8{0} ** 100;
+        var data = [_]u8{ 1, 2, 3, 4 } ++ (.{0} ** 100);
         const operation = MatchOperation{ .offset = 1, .match_length = 10 };
         const offset = applyMatchOperation(operation, data[0..], 4);
         try testing.expectEqual(14, offset);
@@ -193,7 +169,7 @@ test "apply match operation" {
         try testing.expectEqualSlices(u8, &expected_data, data[0..14]);
     }
     {
-        var data = [_]u8{ 1, 2, 3, 4 } ++ [_]u8{0} ** 100;
+        var data = [_]u8{ 1, 2, 3, 4 } ++ (.{0} ** 100);
         const operation = MatchOperation{ .offset = 1, .match_length = 10 };
         const offset = applyMatchOperation(operation, data[0..], 4);
         try testing.expectEqual(14, offset);
@@ -209,8 +185,9 @@ pub fn decodeBlock(compressed: []const u8, read_out: *usize, uncompressed: []u8,
         read_out.* = read;
         written_out.* = written;
     }
+
     while (read < compressed.len) {
-        const token = readToken(compressed[read]);
+        const token: Token = @bitCast(compressed[read]);
         read += 1;
         var literal_length: usize = undefined;
         read += try determineLiteralLengh(token, compressed[read..], &literal_length);
@@ -233,9 +210,9 @@ pub fn decodeBlock(compressed: []const u8, read_out: *usize, uncompressed: []u8,
 
 test "decode block" {
     {
-        const compressed = [_]u8{ 0x8F, 1, 2, 3, 4, 5, 6, 7, 8, 0x02, 0x00, 0xFF, 0x04 };
+        const compressed = .{ 0x8F, 1, 2, 3, 4, 5, 6, 7, 8, 0x02, 0x00, 0xFF, 0x04 };
         var data = [_]u8{0} ** 512;
-        const expected_data = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8 } ++ [_]u8{ 7, 8 } ** 139;
+        const expected_data = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8 } ++ .{ 7, 8 } ** 139;
         var read: usize = undefined;
         var written: usize = undefined;
         try decodeBlock(&compressed, &read, data[0..], &written);
@@ -244,7 +221,7 @@ test "decode block" {
         try testing.expectEqualSlices(u8, &expected_data, data[0..expected_data.len]);
     }
     {
-        const compressed = [_]u8{ 0x8F, 1, 2, 3, 4, 5, 6, 7, 8, 0x02, 0x00, 0x04 } ++ [_]u8{ 0x42, 4, 3, 2, 1, 0x04, 0x00 };
+        const compressed = [_]u8{ 0x8F, 1, 2, 3, 4, 5, 6, 7, 8, 0x02, 0x00, 0x04 } ++ .{ 0x42, 4, 3, 2, 1, 0x04, 0x00 };
         var data = [_]u8{0} ** 512;
         const expected_data = [_]u8{ 1, 2, 3, 4, 5, 6, 7, 8 } ++ [_]u8{ 7, 8 } ** 11 ++ [_]u8{7} ++ [_]u8{ 4, 3, 2, 1 } ** 2 ++ [_]u8{ 4, 3 };
         var read: usize = undefined;
@@ -255,9 +232,9 @@ test "decode block" {
         try testing.expectEqualSlices(u8, &expected_data, data[0..expected_data.len]);
     }
     {
-        const compressed = [_]u8{ 0x8F, 1, 2, 3, 4 };
+        const compressed = .{ 0x8F, 1, 2, 3, 4 };
         var data = [_]u8{0} ** 512;
-        const expected_data = [_]u8{ 1, 2, 3, 4 };
+        const expected_data = .{ 1, 2, 3, 4 };
         var read: usize = undefined;
         var written: usize = undefined;
         try testing.expectError(error.IncompleteData, decodeBlock(&compressed, &read, data[0..], &written));
