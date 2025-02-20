@@ -1,6 +1,6 @@
 .{
     .name = "LZig4",
-    .version = "0.0.10",
+    .version = "0.0.11",
 
     .paths = [][]const u8{
         "README.md",
@@ -12,7 +12,7 @@
 
     .dependencies = .{
         .clap = .{
-            .url = "https://github.com/Hejsil/zig-clap/archive/c0193e9247335a6c1688b946325060289405de2a.tar.gz",
+            .url = "git+https://github.com/Hejsil/zig-clap#c0193e9247335a6c1688b946325060289405de2a",
             .hash = "12207ee987ce045596cb992cfb15b0d6d9456e50d4721c3061c69dabc2962053644d",
         },
     },

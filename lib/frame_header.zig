@@ -47,18 +47,18 @@ pub const FrameFlags = packed struct(u8) {
     version: u2,
 };
 
-pub const BlockMaximumSize = enum(u3) {
-    _64KB = 4,
-    _256KB = 5,
-    _1MB = 6,
-    _4MB = 7,
-    _,
-};
+pub const BlockData = packed struct(u8) {
+    _0: u4,
+    max_size: BlockMaximumSize,
+    _7: u1,
 
-pub const BlockData = struct {
-    _reserved: u1,
-    BlockMaximumSize: BlockMaximumSize,
-    _reserved2: u4,
+    pub const BlockMaximumSize = enum(u3) {
+        _64KiB = 4,
+        _256KiB = 5,
+        _1MiB = 6,
+        _4MiB = 7,
+        _,
+    };
 };
 
 pub const FrameDescriptor = struct {
@@ -82,17 +82,13 @@ pub const FrameHeader = union(FrameType) {
 };
 
 fn readBlockData(data: u8) !BlockData {
-    var block: BlockData = undefined;
-    block._reserved = @intCast((data & 0x80) >> 7);
-    block._reserved2 = @intCast(data & 0x0F);
-    if (block._reserved != 0 or block._reserved2 != 0)
-        return error.UnableToDecode;
-    block.BlockMaximumSize = @enumFromInt(@as(u3, @intCast((data & 0x70) >> 4)));
-    if (block.BlockMaximumSize != BlockMaximumSize._256KB and
-        block.BlockMaximumSize != BlockMaximumSize._64KB and
-        block.BlockMaximumSize != BlockMaximumSize._1MB and
-        block.BlockMaximumSize != BlockMaximumSize._4MB)
-        return error.InvalidBlockSize;
+    const block: BlockData = @bitCast(data);
+
+    if (block._0 | block._7 > 0) return error.UnableToDecode;
+
+    const block_max: u3 = @intFromEnum(block.max_size);
+    if (block_max < 4 or block_max > 7) return error.InvalidBlockSize;
+
     return block;
 }
 
@@ -108,6 +104,7 @@ fn readFrameDescriptor(data: []const u8, frame_descriptor: *FrameDescriptor) !us
     }
 
     frame_descriptor.block_data = try readBlockData(data[1]);
+
     var read: usize = 2;
     if (frame_descriptor.flags.content.size_present) {
         if (data.len < read + 9)
@@ -126,7 +123,7 @@ fn readFrameDescriptor(data: []const u8, frame_descriptor: *FrameDescriptor) !us
     return read;
 }
 
-// returns how many data is has read from the input
+// Returns the number of bytes read from `data`
 fn readSkippableFrameDescriptor(data: []const u8, frame_descriptor: *SkippableFrameDescriptor) !usize {
     if (data.len < 4)
         return error.NotEnoughData;
@@ -276,11 +273,11 @@ test "block data" {
             try testing.expectError(error.UnableToDecode, readFrameDescriptor(&data, &frame_descriptor));
         }
     }
-    inline for (@typeInfo(BlockMaximumSize).Enum.fields) |field| {
+    inline for (@typeInfo(BlockData.BlockMaximumSize).Enum.fields) |field| {
         var frame_descriptor: FrameDescriptor = undefined;
         const data = [3]u8{ 0x40, @as(u8, field.value) << 4, 0x00 };
         _ = try readFrameDescriptor(&data, &frame_descriptor);
-        try testing.expectEqual(@as(BlockMaximumSize, @enumFromInt(field.value)), frame_descriptor.block_data.BlockMaximumSize);
+        try testing.expectEqual(@as(BlockData.BlockMaximumSize, @enumFromInt(field.value)), frame_descriptor.block_data.max_size);
     }
 }
 

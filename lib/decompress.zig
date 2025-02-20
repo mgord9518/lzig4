@@ -111,7 +111,12 @@ pub const Decompressor = struct {
                     written += decode_written;
                 }
 
-                try self.decompressRaw(compressed[read .. read + header.size], &decode_read, decompressed[written..], &decode_written);
+                try self.decompressRaw(
+                    compressed[read .. read + header.size],
+                    &decode_read,
+                    decompressed[written..],
+                    &decode_written,
+                );
             }
         }
 
