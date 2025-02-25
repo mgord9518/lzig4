@@ -6,6 +6,7 @@ pub const FrameType = enum(u32) {
     general = 0x184d2204,
     skippable = 0x184d2a50, // All values up to 0x184d2a5f are skippable
     legacy = 0x184c2102,
+    _,
 
     fn isSkippable(frame_type: FrameType) bool {
         const magic_int = @intFromEnum(frame_type);
@@ -14,8 +15,19 @@ pub const FrameType = enum(u32) {
     }
 };
 
+pub fn handleMagicInt(magic: u32) !FrameType {
+    if (magic & 0xfffffff0 == @intFromEnum(FrameType.skippable)) {
+        return .skippable;
+    }
+
+    return std.meta.intToEnum(
+        FrameType,
+        magic,
+    ) catch return error.InvalidMagic;
+}
+
 // returns the frame type, will always read 4 bytes if available
-fn handleMagic(data: *const [4]u8) !FrameType {
+pub fn handleMagic(data: *const [4]u8) !FrameType {
     if (data.len < 4) {
         return error.NotEnoughData;
     }
@@ -92,7 +104,7 @@ fn readBlockData(data: u8) !BlockData {
     return block;
 }
 
-// returns how much data is has read from the input
+// Returns the number of bytes read from `data`
 fn readFrameDescriptor(data: []const u8, frame_descriptor: *FrameDescriptor) !usize {
     if (data.len < 3) {
         return error.NotEnoughData;
@@ -146,8 +158,16 @@ pub fn readFrameHeader(data: []const u8, frame_header: *FrameHeader) !usize {
             frame_header.* = FrameHeader{ .skippable = undefined };
             break :blk try readSkippableFrameDescriptor(data[4..], &frame_header.skippable);
         },
-        .legacy => 0,
+        // Legacy header is just magic number followed by blocks
+        .legacy => blk: {
+            frame_header.* = .legacy;
+            break :blk 0;
+        },
+
+        else => unreachable, //TODO
     };
+
+    std.debug.print("REACH\n", .{});
 
     return read + 4;
 }

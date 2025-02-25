@@ -39,17 +39,20 @@ pub fn main() !void {
     defer input_file.close();
     defer output_file.close();
 
-    const compressed = try input_file.reader().readAllAlloc(allocator, 1024 * 1024 * 8);
-    defer allocator.free(compressed);
+    var decompressor = try decompress.Decompressor(@TypeOf(input_file)).init(allocator, input_file);
 
-    const data: []u8 = try allocator.alloc(u8, 1024 * 1024 * 16);
-    defer allocator.free(data);
-    var decompressor: decompress.Decompressor = undefined;
-    var read: usize = undefined;
-    var written: usize = undefined;
-    try decompressor.decompress(compressed, &read, data[0..], &written);
+    // LZ4 blocks can be no larger than 8MiB, this allows to skip double copying
+    // through the reader interface
+    // If you know the LZ4 data does not use legacy frames, this value can be
+    // lowered to 4MiB without performance impact
+    var buf = try allocator.alloc(u8, 1024 * 1024 * 8);
+    defer allocator.free(buf);
 
-    try output_file.writer().writeAll(data[0..written]);
+    while (true) {
+        const read = try decompressor.read(buf);
+        if (read == 0) break;
 
-    std.debug.print("Input: {?s}\nOutput: {?s}\n", .{ input, output });
+        std.debug.print("loaded {s}\n", .{buf[0..read]});
+        _ = try output_file.write(buf[0..read]);
+    }
 }
