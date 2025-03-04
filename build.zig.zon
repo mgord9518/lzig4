@@ -1,6 +1,6 @@
 .{
     .name = "LZig4",
-    .version = "0.0.12",
+    .version = "0.0.13",
 
     .paths = [][]const u8{
         "README.md",
