@@ -30,31 +30,7 @@ pub fn Decompressor(comptime ReaderType: type) type {
                 .current_frame_header = undefined,
             };
 
-            var header = try frame.handleMagicInt(try reader.reader().readInt(
-                u32,
-                .little,
-            ));
-
-            while (header == .skippable) {
-                const size = try reader.reader().readInt(
-                    u32,
-                    .little,
-                );
-
-                try (reader.reader().skipBytes(size, .{}));
-
-                header = try frame.handleMagicInt(try reader.reader().readInt(
-                    u32,
-                    .little,
-                ));
-            }
-
-            self.current_frame_header = switch (header) {
-                .general => .{ .general = try self.readFrameDescriptor() },
-                .legacy => .legacy,
-                .skippable => unreachable,
-                else => unreachable,
-            };
+            self.current_frame_header = try self.readFrameHeader();
 
             return self;
         }
@@ -64,51 +40,8 @@ pub fn Decompressor(comptime ReaderType: type) type {
             self.decompress_buf.deinit();
         }
 
-        fn readFrameDescriptor(self: *Self) !frame.FrameDescriptor {
-            var frame_descriptor = frame.FrameDescriptor{
-                .flags = undefined,
-                .block_data = undefined,
-                .content_size = null,
-                .dictionary_id = null,
-                .header_checksum = undefined,
-            };
-
-            frame_descriptor.flags = @bitCast(try self.reader.reader().readByte());
-            if (frame_descriptor.flags.version != 1) {
-                return error.UnsupportedVersion;
-            }
-
-            frame_descriptor.block_data = @bitCast(try self.reader.reader().readByte());
-            if (frame_descriptor.block_data._0 | frame_descriptor.block_data._7 > 0) return error.UnableToDecode;
-
-            const block_max: u3 = @intFromEnum(frame_descriptor.block_data.max_size);
-            if (block_max < 4 or block_max > 7) return error.InvalidBlockSize;
-
-            if (frame_descriptor.flags.content.size_present) {
-                frame_descriptor.content_size = try self.reader.reader().readInt(u64, .little);
-            }
-
-            if (frame_descriptor.flags.dictionary.id_present) {
-                frame_descriptor.dictionary_id = try self.reader.reader().readInt(u32, .little);
-            }
-
-            frame_descriptor.header_checksum = try self.reader.reader().readByte();
-
-            return frame_descriptor;
-        }
-
-        fn decompressBlockInPlace(self: *Self, buf: []u8) !usize {
-            var read_out: usize = 0;
-            var written_out: usize = 0;
-
-            try block.decodeBlock(
-                self.compressed_buf.items,
-                &read_out,
-                buf,
-                &written_out,
-            );
-
-            return written_out;
+        pub fn readFrameHeader(self: *Self) !frame.FrameHeader {
+            return frame.FrameHeader.readFrameHeader(self.reader);
         }
 
         pub fn read(self: *Self, buf: []u8) !usize {
@@ -136,7 +69,17 @@ pub fn Decompressor(comptime ReaderType: type) type {
             // The entire block must be decoded at once. Try to use the
             // caller's buffer, falling back on an internal one if it's too small
             if (self.off == 0 and decompressed_block_size <= buf.len) {
-                return self.decompressBlockInPlace(buf);
+                var read_out: usize = 0;
+                var written_out: usize = 0;
+
+                try block.decodeBlock(
+                    self.compressed_buf.items,
+                    &read_out,
+                    buf,
+                    &written_out,
+                );
+
+                return written_out;
             } else if (self.off == self.decompress_buf.items.len) {
                 try self.growDecompressBufferIfNeeded();
                 self.off = 0;
