@@ -1,5 +1,5 @@
 const std = @import("std");
-const decompress = @import("lzig4").decompress;
+const lz4 = @import("lzig4");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -23,9 +23,9 @@ pub fn main() !void {
     defer input_file.close();
     defer output_file.close();
 
-    var decompressor = try decompress.Decompressor(@TypeOf(input_file)).init(
+    var decompressor = try lz4.decompress(
         allocator,
-        input_file,
+        input_file.reader(),
     );
 
     // Legacy LZ4 blocks are 8MiB, this allows to skip double copying data

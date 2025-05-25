@@ -7,7 +7,7 @@ pub const FrameType = enum {
     skippable,
 
     pub fn readFrameType(in_stream: anytype) !FrameType {
-        const magic = try in_stream.reader().readInt(u32, .little);
+        const magic = try in_stream.readInt(u32, .little);
 
         return switch (magic) {
             0x184d2204 => .general,
@@ -89,26 +89,26 @@ pub const FrameDescriptor = struct {
             .header_checksum = undefined,
         };
 
-        frame_descriptor.flags = @bitCast(try in_stream.reader().readByte());
+        frame_descriptor.flags = @bitCast(try in_stream.readByte());
         if (frame_descriptor.flags.version != 1) {
             return error.UnsupportedVersion;
         }
 
-        frame_descriptor.block_data = @bitCast(try in_stream.reader().readByte());
+        frame_descriptor.block_data = @bitCast(try in_stream.readByte());
         if (frame_descriptor.block_data._0 | frame_descriptor.block_data._7 > 0) return error.UnableToDecode;
 
         const block_max: u3 = @intFromEnum(frame_descriptor.block_data.max_size);
         if (block_max < 4 or block_max > 7) return error.InvalidBlockSize;
 
         if (frame_descriptor.flags.content.size_present) {
-            frame_descriptor.content_size = try in_stream.reader().readInt(u64, .little);
+            frame_descriptor.content_size = try in_stream.readInt(u64, .little);
         }
 
         if (frame_descriptor.flags.dictionary.id_present) {
-            frame_descriptor.dictionary_id = try in_stream.reader().readInt(u32, .little);
+            frame_descriptor.dictionary_id = try in_stream.readInt(u32, .little);
         }
 
-        frame_descriptor.header_checksum = try in_stream.reader().readByte();
+        frame_descriptor.header_checksum = try in_stream.readByte();
         if (opts.verify_checksum) {
             try frame_descriptor.verifyChecksum();
         }
@@ -129,12 +129,12 @@ pub const FrameHeader = union(FrameType) {
         // TODO: expose skippable frame headers to caller so they can
         // handle format extensions
         while (header == .skippable) : (header = try FrameType.readFrameType(in_stream)) {
-            const size = try in_stream.reader().readInt(
+            const size = try in_stream.readInt(
                 u32,
                 .little,
             );
 
-            try (in_stream.reader().skipBytes(size, .{}));
+            try (in_stream.skipBytes(size, .{}));
         }
 
         return switch (header) {

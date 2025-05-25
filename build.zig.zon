@@ -1,6 +1,7 @@
 .{
-    .name = "LZig4",
+    .name = .lzig4,
     .version = "0.0.14",
+    .fingerprint = 0xd26cd4d32ed4a2d1,
 
     .paths = [][]const u8{
         "README.md",

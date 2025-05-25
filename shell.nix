@@ -2,6 +2,6 @@
 
 pkgs.mkShell {
   nativeBuildInputs = with pkgs.buildPackages; [
-    zig_0_13
+    zig_0_14
   ];
 }

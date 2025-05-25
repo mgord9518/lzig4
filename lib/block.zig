@@ -9,7 +9,7 @@ pub const BlockHeader = packed struct(u32) {
 };
 
 test "read block header" {
-    const data = .{ 0xFE, 0xDE, 0xBC, 0x9A };
+    const data = [_]u8{ 0xFE, 0xDE, 0xBC, 0x9A };
     const header: BlockHeader = @bitCast(mem.readInt(u32, &data, .little));
 
     try testing.expectEqual(header.size, 0x1ABCDEFE);
