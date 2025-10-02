@@ -10,27 +10,34 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const exe = b.addExecutable(.{
-        .name = "lz4",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // TODO: re-enable binary
+    if (false) {
+        const exe_mod = b.addModule("lzig4", .{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
 
-    exe.root_module.addImport("lzig4", lib_mod);
+        const exe = b.addExecutable(.{
+            .name = "lz4",
+            .root_module = exe_mod,
+        });
 
-    b.installArtifact(exe);
+        exe.root_module.addImport("lzig4", lib_mod);
 
-    const run_cmd = b.addRunArtifact(exe);
+        b.installArtifact(exe);
 
-    run_cmd.step.dependOn(b.getInstallStep());
+        const run_cmd = b.addRunArtifact(exe);
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+        run_cmd.step.dependOn(b.getInstallStep());
+
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+
+        const run_step = b.step("run", "Run the app");
+        run_step.dependOn(&run_cmd.step);
     }
-
-    const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
 
     const lib_unit_tests = b.addTest(.{
         .root_module = lib_mod,

@@ -1,6 +1,6 @@
 .{
     .name = .lzig4,
-    .version = "0.0.14",
+    .version = "0.0.15",
     .fingerprint = 0xd26cd4d32ed4a2d1,
 
     .paths = [][]const u8{

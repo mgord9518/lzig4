@@ -6,23 +6,26 @@
   };
 
   outputs = { self, nixpkgs }:
-    let
-      systems = [
-        "x86_64-linux"
-        "i686-linux"
-        "x86_64-darwin"
-        "aarch64-linux"
-        "armv6l-linux"
-        "armv7l-linux"
-      ];
+  let
+    systems = [
+      "x86_64-linux"
+      "i686-linux"
+      "x86_64-darwin"
+      "aarch64-linux"
+      "armv6l-linux"
+      "armv7l-linux"
+    ];
 
-      pkgs = nixpkgs.legacyPackages;
+    pkgs = nixpkgs.legacyPackages;
 
-      forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
-    in {
+    forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f system);
+  in {
+    devShells = forAllSystems (system: {
+      default = import ./nix/shell.nix { pkgs = pkgs.${system}; };
+    });
 
     packages = forAllSystems (system: {
-      default = import ./shell.nix { pkgs = pkgs.${system}; };
+      default = pkgs.${system}.callPackage ./nix/default.nix {};
     });
   };
 }

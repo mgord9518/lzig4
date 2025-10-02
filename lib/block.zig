@@ -2,13 +2,13 @@ const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
 
-// for the frame format
+// For the frame format
 pub const BlockHeader = packed struct(u32) {
     size: u31,
     uncompressed: bool,
 };
 
-test "read block header" {
+test "BlockHeader" {
     const data = [_]u8{ 0xFE, 0xDE, 0xBC, 0x9A };
     const header: BlockHeader = @bitCast(mem.readInt(u32, &data, .little));
 
@@ -23,7 +23,7 @@ const Token = packed struct(u8) {
     literal_length: u4,
 };
 
-test "Read Token" {
+test "Token" {
     const token: Token = @bitCast(@as(u8, 0x54));
 
     try testing.expectEqual(token.literal_length, 5);
@@ -35,7 +35,7 @@ pub fn determineLiteralLengh(token: Token, data: []const u8, length_out: *usize)
     return variableLengthIntegerWithHalfByteStart(token.literal_length, data, length_out);
 }
 
-test "determine literal length" {
+test "determineLiteralLength" {
     {
         const data = [3]u8{ 0xF0, 33, 4 };
         var length: usize = undefined;
@@ -70,7 +70,7 @@ const MatchOperation = struct {
     match_length: usize, // minimal value is 4
 };
 
-// returns how many bytes have been read
+// Returns how many bytes have been read
 pub fn readMatchOperation(token: Token, data: []const u8, operation: *MatchOperation) !usize {
     if (data.len < 2) {
         return error.NoEnoughData;
@@ -106,7 +106,7 @@ fn variableLengthIntegerWithHalfByteStart(start: u4, data: []const u8, length_ou
     return error.IncompleteData;
 }
 
-test "read match operation" {
+test "readMatchOperation" {
     {
         const token = Token{ .literal_length = 0, .match_length = 10 };
         const data = .{ 0x04, 0x30, 0xFF, 32 };
@@ -141,7 +141,7 @@ test "read match operation" {
     }
 }
 
-// returns the end offset/last unwritten position
+// Returns the end offset/last unwritten position
 pub fn applyMatchOperation(operation: MatchOperation, uncompressed: []u8, start_offset: usize) usize {
     std.debug.assert(operation.offset > 0);
     std.debug.assert(start_offset >= operation.offset);
@@ -151,7 +151,7 @@ pub fn applyMatchOperation(operation: MatchOperation, uncompressed: []u8, start_
     return end_offset;
 }
 
-test "apply match operation" {
+test "applyMatchOperation" {
     {
         var data = [_]u8{ 1, 2, 3, 4 } ++ (.{0} ** 100);
         const operation = MatchOperation{ .offset = 3, .match_length = 100 };
@@ -208,7 +208,7 @@ pub fn decodeBlock(compressed: []const u8, read_out: *usize, uncompressed: []u8,
     }
 }
 
-test "decode block" {
+test "decodeBlock" {
     {
         const compressed = .{ 0x8F, 1, 2, 3, 4, 5, 6, 7, 8, 0x02, 0x00, 0xFF, 0x04 };
         var data = [_]u8{0} ** 512;

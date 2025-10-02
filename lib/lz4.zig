@@ -4,222 +4,228 @@ const testing = std.testing;
 pub const frame = @import("frame_header.zig");
 pub const block = @import("block.zig");
 
-pub const DecompressorOptions = struct {
-    verify_checksum: bool = true,
-};
+pub const Decompressor = struct {
+    in_stream: *std.Io.Reader,
+    current_frame_header: frame.FrameHeader,
+    interface: std.Io.Reader,
+    allocator: std.mem.Allocator,
+    buffer: []u8,
 
-pub fn decompress(allocator: std.mem.Allocator, reader: anytype) !Decompressor(@TypeOf(reader)) {
-    return try Decompressor(@TypeOf(reader)).init(allocator, reader);
-}
+    pub const Options = struct {
+        verify_checksum: bool = true,
+    };
 
-pub fn Decompressor(comptime ReaderType: type) type {
-    return struct {
-        const Self = @This();
+    pub fn init(allocator: std.mem.Allocator, in_stream: *std.Io.Reader) !Decompressor {
+        const buffer = try allocator.alloc(u8, 1024 * 1024 * 8);
+        const compress_buffer = try allocator.alloc(u8, 1024 * 1024 * 16);
 
-        off: usize,
-        compressed_buf: std.ArrayList(u8),
-        decompress_buf: std.ArrayList(u8),
-        in_stream: ReaderType,
-        current_frame_header: frame.FrameHeader,
-
-        pub const Reader = std.io.Reader(Self, ReadError, read);
-        //pub const ReadError = error{InvalidBlockSize};
-        // TODO
-        pub const ReadError = anyerror;
-
-        pub fn init(allocator: std.mem.Allocator, in_stream: ReaderType) !Self {
-            const compressed_buf = std.ArrayList(u8).init(allocator);
-            const decompress_buf = std.ArrayList(u8).init(allocator);
-
-            var self = Self{
-                .off = 0,
-                .compressed_buf = compressed_buf,
-                .decompress_buf = decompress_buf,
-                .in_stream = in_stream,
-                .current_frame_header = undefined,
-            };
-
-            self.current_frame_header = try self.readFrameHeader();
-
-            return self;
-        }
-
-        pub fn deinit(self: *Self) void {
-            self.compressed_buf.deinit();
-            self.decompress_buf.deinit();
-        }
-
-
-        pub fn readFrameHeader(self: *Self) !frame.FrameHeader {
-            return frame.FrameHeader.readFrameHeader(self.in_stream);
-        }
-
-        pub fn read(self: *Self, buf: []u8) ReadError!usize {
-            const decompressed_block_size = try self.decompressedBlockSize();
-
-            // Made it to the end of the buffer (or haven't populated it yet)
-            if (self.off == self.decompress_buf.items.len) {
-                self.loadCompressedBuffer() catch |err| {
-                    switch (err) {
-                        error.EndOfStream => return 0,
-
-                        // TODO: load another frame descriptor
-                        error.EndMark => return 0,
-                        //                        error.BlockNotCompressed => {
-                        //                            const block_size = try self.in_stream.reader().readInt(u32, .little);
-                        //
-                        //                            return try self.reader.reader().readAll(buf[0..block_size]);
-                        //                        },
-
-                        else => return err,
-                    }
-                };
-            }
-
-            // The entire block must be decoded at once. Try to use the
-            // caller's buffer, falling back on an internal one if it's too small
-            if (self.off == 0 and decompressed_block_size <= buf.len) {
-                var read_out: usize = 0;
-                var written_out: usize = 0;
-
-                try block.decodeBlock(
-                    self.compressed_buf.items,
-                    &read_out,
-                    buf,
-                    &written_out,
-                );
-
-                return written_out;
-            } else if (self.off == self.decompress_buf.items.len) {
-                try self.growDecompressBufferIfNeeded();
-                self.off = 0;
-            }
-
-            const take = @min(
-                buf.len,
-                self.decompress_buf.items[self.off..].len,
-            );
-
-            @memcpy(
-                buf[0..take],
-                self.decompress_buf.items[self.off..][0..take],
-            );
-
-            self.off += take;
-
-            return take;
-        }
-
-        // Reads an entire compressed block into the buffer
-        fn loadCompressedBuffer(self: *Self) !void {
-            const compressed_block_size = switch (self.current_frame_header) {
-                // TODO: check if another frame header
-                .legacy => try self.in_stream.readInt(u32, .little),
-
-                .general => blk: {
-                    const header: block.BlockHeader = @bitCast(try self.in_stream.readInt(u32, .little));
-
-                    if (header.uncompressed) return error.BlockNotCompressed;
-                    if (header.size == 0) return error.EndMark;
-
-                    break :blk header.size;
+        var decompressor: Decompressor = .{
+            .buffer = compress_buffer,
+            .allocator = allocator,
+            .in_stream = in_stream,
+            .current_frame_header = undefined,
+            .interface = .{
+                .vtable = &.{
+                    .stream = Decompressor.stream,
+                    .readVec = Decompressor.readVec,
                 },
-                else => unreachable,
-            };
+                .buffer = buffer,
+                .seek = 0,
+                .end = 0,
+            },
+        };
 
-            if (compressed_block_size > self.compressed_buf.capacity) {
-                try self.compressed_buf.resize(compressed_block_size);
-            }
+        decompressor.current_frame_header = try frame.FrameHeader.takeFromStream(in_stream);
 
-            const read_amount = try self.in_stream.readAll(self.compressed_buf.items);
+        return decompressor;
+    }
 
-            if (read_amount != compressed_block_size) return error.ShortRead;
+    pub fn deinit(decompressor: Decompressor) void {
+        decompressor.allocator.free(decompressor.interface.buffer);
+        decompressor.allocator.free(decompressor.buffer);
+    }
 
-            self.compressed_buf.shrinkRetainingCapacity(read_amount);
+    fn resetBuffer(decompressor: *Decompressor) !void {
+        var block_info = try decompressor.getBlockInfo();
+
+        sw: switch (block_info.isEndMark()) {
+            // End of frame, attempt to read another one
+            true => {
+                if (decompressor.current_frame_header != .general) break :sw;
+
+                // Dump checksum
+                // TODO: verify it
+                _ = try decompressor.in_stream.takeInt(u32, .little);
+                decompressor.current_frame_header = frame.FrameHeader.takeFromStream(decompressor.in_stream) catch return error.EndOfStream;
+
+                block_info = try decompressor.getBlockInfo();
+                continue :sw block_info.isEndMark();
+            },
+            false => {},
         }
 
-        // Gets size of decompressed block based on current frame type
-        fn decompressedBlockSize(self: *const Self) error{InvalidBlockSize}!usize {
-            return switch (self.current_frame_header) {
-                // Legacy blocks are always 8 MiB
-                .legacy => 1024 * 1024 * 8,
+        if (block_info.uncompressed) {
+            var buffer_writer: std.Io.Writer = .fixed(decompressor.interface.buffer);
+            try decompressor.in_stream.streamExact(&buffer_writer, block_info.size);
 
-                .general => |general| @as(usize, switch (general.block_data.max_size) {
-                    ._64KiB => 1024 * 64,
-                    ._256KiB => 1024 * 256,
-                    ._1MiB => 1024 * 1024,
-                    ._4MiB => 1024 * 1024 * 4,
-
-                    else => return error.InvalidBlockSize,
-                }),
-
-                else => unreachable,
-            };
+            return;
         }
 
-        // Blocks must be fully decompressed before use, so we stuff a buffer
-        // for easier reading
-        pub fn growDecompressBufferIfNeeded(self: *Self) !void {
-            const decompressed_block_size = try self.decompressedBlockSize();
+        var buffer_writer: std.Io.Writer = .fixed(decompressor.buffer);
+        try decompressor.in_stream.streamExact(&buffer_writer, block_info.size);
 
-            // Block is bigger than current buffer, grow it
-            if (decompressed_block_size > self.decompress_buf.capacity) {
-                try self.decompress_buf.resize(decompressed_block_size);
-            }
+        var read_out: usize = 0;
+        var written_out: usize = 0;
 
-            var read_out: usize = undefined;
-            var written_out: usize = undefined;
+        block.decodeBlock(
+            decompressor.buffer[0..block_info.size],
+            &read_out,
+            decompressor.interface.buffer,
+            &written_out,
+        ) catch unreachable;
 
-            try block.decodeBlock(
-                self.compressed_buf.items,
-                &read_out,
-                self.decompress_buf.items[0..decompressed_block_size],
-                &written_out,
-            );
+        // Attempt to read another frame header
+        if (decompressor.current_frame_header == .legacy) blk: {
+            decompressor.current_frame_header = frame.FrameHeader.takeFromStream(
+                decompressor.in_stream
+            ) catch break :blk;
+        }
 
-            self.decompress_buf.shrinkRetainingCapacity(written_out);
+        decompressor.interface.seek = 0;
+        decompressor.interface.end = written_out;
+    }
+
+    fn readVec(reader: *std.Io.Reader, data: [][]u8) std.Io.Reader.Error!usize {
+        _ = data;
+
+        const decompressor: *Decompressor = @alignCast(@fieldParentPtr("interface", reader));
+        decompressor.resetBuffer() catch |err| switch (err) {
+            error.WriteFailed => return error.EndOfStream,
+            error.EndOfStream => return error.EndOfStream,
+            error.ReadFailed => return error.ReadFailed,
+        };
+        
+        return 0;
+    }
+
+    fn stream(
+        reader: *std.Io.Reader,
+        writer: *std.Io.Writer,
+        limit: std.Io.Limit,
+    ) std.Io.Reader.StreamError!usize {
+        _ = limit;
+        _ = writer;
+
+        const decompressor: *Decompressor = @alignCast(@fieldParentPtr("interface", reader));
+        try decompressor.resetBuffer();
+
+        return 0;
+    }
+
+    // Gets size of decompressed block based on current frame type
+    fn decompressedBlockSize(decompressor: Decompressor) error{InvalidBlockSize}!usize {
+        return switch (decompressor.current_frame_header) {
+            // Legacy blocks are always 8 MiB
+            .legacy => 1024 * 1024 * 8,
+
+            .general => |general| @as(usize, switch (general.block_data.max_size) {
+                ._64KiB => 1024 * 64,
+                ._256KiB => 1024 * 256,
+                ._1MiB => 1024 * 1024,
+                ._4MiB => 1024 * 1024 * 4,
+
+                else => return error.InvalidBlockSize,
+            }),
+
+            else => unreachable,
+        };
+    }
+
+    const BlockInfo = struct {
+        uncompressed: bool,
+        size: u32,
+
+        fn isEndMark(block_info: BlockInfo) bool {
+            return @intFromBool(block_info.uncompressed) + block_info.size == 0;
         }
     };
-}
 
-test {
-    std.testing.refAllDecls(@This());
-}
+    fn getBlockInfo(decompressor: *Decompressor) std.Io.Reader.Error!BlockInfo {
+        return switch (decompressor.current_frame_header) {
+            .legacy => .{
+                .uncompressed = false,
+                .size = decompressor.current_frame_header.legacy,
+            },
 
-test "Decompress lorem ipsum (modern frame format)" {
+            .general => blk: {
+                const header: block.BlockHeader = @bitCast(try decompressor.in_stream.takeInt(u32, .little));
+
+                break :blk .{
+                    .uncompressed = header.uncompressed,
+                    .size = header.size,
+                };
+            },
+
+            else => unreachable,
+        };
+    }
+};
+
+fn testDecompressingStream(
+    compressed_data: []const u8,
+    expected_uncompressed_data: []const u8
+) !void {
     const allocator = std.testing.allocator;
 
-    const compressed = @embedFile("lorem.txt.lz4");
-    const expected = @embedFile("lorem.txt");
+    var reader: std.Io.Reader = .fixed(compressed_data);
 
-    var buf: [512]u8 = undefined;
-
-    var fbs = std.io.fixedBufferStream(compressed);
-
-    var decompressor = try decompress(allocator, fbs.reader());
+    var decompressor: Decompressor = try .init(allocator, &reader);
     defer decompressor.deinit();
 
-    const read_amount = try decompressor.read(&buf);
+    var allocating_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer allocating_writer.deinit();
+    const writer = &allocating_writer.writer;
 
-    try testing.expectEqual(expected.len, read_amount);
-    try testing.expectEqualSlices(u8, expected, buf[0..read_amount]);
+    const written = try decompressor.interface.streamRemaining(writer);
+
+    try writer.flush();
+
+    const result = writer.buffer[0..written];
+
+    try testing.expect(std.mem.eql(u8, result, expected_uncompressed_data));
 }
 
-test "Decompress lorem ipsum (legacy frame format)" {
-    const allocator = std.testing.allocator;
+test "Decompress single frame (general format)" {
+    try testDecompressingStream(
+        @embedFile("lorem.txt.lz4"),
+        @embedFile("lorem.txt"),
+    );
+}
 
-    const compressed = @embedFile("lorem.txt.legacy_frame.lz4");
-    const expected = @embedFile("lorem.txt");
+test "Decompress single frame (legacy format)" {
+    try testDecompressingStream(
+        @embedFile("lorem.txt.legacy_frame.lz4"),
+        @embedFile("lorem.txt"),
+    );
+}
 
-    var buf: [512]u8 = undefined;
+test "Decompress concatenated frames (general format)" {
+    try testDecompressingStream(
+        @embedFile("lorem.txt.lz4") ++ @embedFile("lorem.txt.lz4"),
+        @embedFile("lorem.txt") ++ @embedFile("lorem.txt"),
+    );
+}
 
-    var fbs = std.io.fixedBufferStream(compressed);
+test "Decompress concatenated frames (legacy format)" {
+    try testDecompressingStream(
+        @embedFile("lorem.txt.legacy_frame.lz4") ++ @embedFile("lorem.txt.legacy_frame.lz4"),
+        @embedFile("lorem.txt") ++ @embedFile("lorem.txt"),
+    );
+}
 
-    var decompressor = try decompress(allocator, fbs.reader());
-    defer decompressor.deinit();
-
-    const read_amount = try decompressor.read(&buf);
-
-    try testing.expectEqual(expected.len, read_amount);
-    try testing.expectEqualSlices(u8, expected, buf[0..read_amount]);
+test "Decompress concatenated frames (mixed formats)" {
+    try testDecompressingStream(
+        @embedFile("lorem.txt.legacy_frame.lz4") ++ @embedFile("lorem.txt.lz4") ++ @embedFile("lorem.txt.legacy_frame.lz4"),
+        @embedFile("lorem.txt") ++ @embedFile("lorem.txt") ++ @embedFile("lorem.txt"),
+    );
 }
