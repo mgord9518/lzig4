@@ -1,4 +1,9 @@
 # LZig4
-Implementing lz4 in zig.
+LZ4 implementation in Zig
 
-Currently supports Zig 0.13
+Features:
+ - Streaming API
+ - Modern and legacy frame formats
+ - Reading concatenated frames
+
+Currently supports Zig 0.15
